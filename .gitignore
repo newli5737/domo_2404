@@ -1,0 +1,21 @@
+# HAR files (50-145MB each)
+*.com
+*.har
+
+# Generated JSON data
+definition.json
+global_mapping.json
+response*.json
+analyzer_sample.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Temp/debug files
+temp_results/
+debug_slicers.txt
+test_debug.py
+test_scan.py
+filter_investigation_report.md.resolved
+filter_propagation_report.txt
