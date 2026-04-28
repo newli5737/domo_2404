@@ -62,9 +62,10 @@ def analyze_page(har_path, page_id):
     page_title = stacks.get('page', {}).get('title', stacks.get('title', f'Page {page_id}'))
     cards = stacks.get('cards', [])
 
-    # ── Build dataset column map from analyzer ──
-    ds_columns = {}  # ds_id -> set of column names (physical + formula)
-    ds_names = {}    # ds_id -> ds_name
+    # ── Build dataset column map + ID→name map from analyzer ──
+    ds_columns = {}   # ds_id -> set of column names (physical + formula)
+    ds_names = {}     # ds_id -> ds_name
+    col_id_to_name = {}  # calculation_xxx or column_id -> actual readable name
     if analyzer:
         for ds in analyzer.get('details', {}).get('dataSources', []):
             ds_id = ds.get('id', '')
@@ -72,24 +73,21 @@ def analyze_page(har_path, page_id):
             cols = set()
             for col in (ds.get('columns') or []):
                 name = col.get('name', '')
+                col_id = col.get('id', '')
                 if name and not name.startswith('calculation_') and not re.match(r'^[a-f0-9-]{36}$', name):
                     cols.add(name)
+                # Map col_id -> name (physical columns: id is usually same as name)
+                if col_id and name:
+                    col_id_to_name[col_id] = name
             for fm in (ds.get('formulas') or []):
                 n = fm.get('name', '')
+                fm_id = fm.get('id', '')
                 if n and not n.startswith('calculation_'):
                     cols.add(n)
+                # Map formula id (calculation_xxx) -> readable name
+                if fm_id and n:
+                    col_id_to_name[fm_id] = n
             ds_columns[ds_id] = cols
-
-    # ── Build ID-to-name mapping from all card subscriptions ──
-    id_to_name = {}
-    for card in cards:
-        for sub_item in card.get('subscriptions', []):
-            inner = sub_item.get('subscription', {})
-            for col in inner.get('columns', []):
-                col_id = col.get('column') or col.get('formulaId', '')
-                alias = col.get('alias', '')
-                if col_id and alias:
-                    id_to_name[col_id] = alias
 
     # ── Identify slicer cards ──
     SLICER_TYPES = {'badge_slicer', 'badge_dropdown_selector', 'badge_checkbox_selector',
@@ -101,15 +99,13 @@ def analyze_page(har_path, page_id):
         if chart_type not in SLICER_TYPES and 'selector' not in chart_type and 'slicer' not in chart_type:
             continue
 
-        # Extract filter column
+        # Extract filter column ID
         filter_col_id = None
-        filter_col_name = None
         for sub_item in card.get('subscriptions', []):
             inner = sub_item.get('subscription', {})
             for col in inner.get('columns', []):
                 if col.get('mapping') == 'ITEM':
                     filter_col_id = col.get('column') or col.get('formulaId', '')
-                    filter_col_name = col.get('alias', '')
                     break
             if filter_col_id: break
 
@@ -124,19 +120,17 @@ def analyze_page(har_path, page_id):
 
         if not filter_col_id: continue
 
-        # Resolve name
-        if not filter_col_name:
-            filter_col_name = id_to_name.get(filter_col_id, card.get('title', filter_col_id))
-
-        # Also resolve by checking analyzer columns
-        resolved_name = filter_col_name
-        for ds_id, cols in ds_columns.items():
-            if filter_col_id in cols:
-                resolved_name = filter_col_id
-                break
-            if filter_col_name in cols:
-                resolved_name = filter_col_name
-                break
+        # Resolve actual column name:
+        # Priority: analyzer col_id_to_name > raw col_id (if it's a readable name) > card title
+        if filter_col_id in col_id_to_name:
+            # calculation_xxx -> actual name like ユニット
+            filter_col_name = col_id_to_name[filter_col_id]
+        elif not filter_col_id.startswith('calculation_') and not re.match(r'^[a-f0-9-]{36}$', filter_col_id):
+            # Already a readable name like 担当施工店
+            filter_col_name = filter_col_id
+        else:
+            # Fallback to card title (should rarely happen)
+            filter_col_name = card.get('title', filter_col_id)
 
         # Get slicer's own dataset
         slicer_ds_ids = set()
@@ -152,7 +146,7 @@ def analyze_page(har_path, page_id):
             'title': card.get('title', ''),
             'chart_type': chart_type,
             'filter_col_id': filter_col_id,
-            'filter_col_name': resolved_name or filter_col_name,
+            'filter_col_name': filter_col_name,
             'ds_ids': slicer_ds_ids,
             'ds_name': slicer_ds_name,
         })
